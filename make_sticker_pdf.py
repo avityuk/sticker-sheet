@@ -93,6 +93,15 @@ def parse_args(argv: Iterable[str]) -> argparse.Namespace:
         help="How many images to place on each page.",
     )
     parser.add_argument(
+        "--page-count",
+        type=int,
+        default=None,
+        help=(
+            "Generate exactly this many pages. When set, pages are fully filled "
+            "and images are cycled as needed."
+        ),
+    )
+    parser.add_argument(
         "--orientation",
         choices=("portrait", "landscape"),
         required=True,
@@ -196,6 +205,9 @@ def main(argv: Iterable[str]) -> int:
     if args.images_per_page <= 0:
         print("Error: --images-per-page must be greater than 0.", file=sys.stderr)
         return 2
+    if args.page_count is not None and args.page_count <= 0:
+        print("Error: --page-count must be greater than 0.", file=sys.stderr)
+        return 2
     if args.margin_in < 0:
         print("Error: --margin-in cannot be negative.", file=sys.stderr)
         return 2
@@ -235,12 +247,19 @@ def main(argv: Iterable[str]) -> int:
     dpi_warnings: list[str] = []
     trimmed_count = 0
 
-    pages = math.ceil(len(images) / args.images_per_page)
-    index = 0
+    if args.page_count is None:
+        pages = math.ceil(len(images) / args.images_per_page)
+        placement_images = list(images)
+        cycling_used = False
+    else:
+        pages = args.page_count
+        total_slots = pages * args.images_per_page
+        placement_images = [images[i % len(images)] for i in range(total_slots)]
+        cycling_used = total_slots > len(images)
 
-    for _page_num in range(pages):
-        page_images = images[index : index + args.images_per_page]
-        index += len(page_images)
+    for page_num in range(pages):
+        start = page_num * args.images_per_page
+        page_images = placement_images[start : start + args.images_per_page]
 
         slots = centered_slots(grid.rows, grid.cols, len(page_images))
 
@@ -286,14 +305,23 @@ def main(argv: Iterable[str]) -> int:
 
     c.save()
 
-    print(f"Wrote {args.output} with {len(images)} images across {pages} page(s).")
+    print(
+        f"Wrote {args.output} with {len(placement_images)} image placement(s) "
+        f"across {pages} page(s)."
+    )
     print(
         f"Layout: {grid.rows} row(s) x {grid.cols} column(s), "
         f"{args.images_per_page} image(s)/page, {args.orientation}."
     )
+    if args.page_count is not None:
+        print(
+            "Fill mode: fixed page count enabled"
+            f" ({args.page_count} page(s), cycling={'yes' if cycling_used else 'no'})."
+        )
     print(
         "Transparent trim: "
-        f"{trimmed_count}/{len(images)} image(s) cropped to rectangular alpha bounds."
+        f"{trimmed_count}/{len(placement_images)} placement(s) cropped to "
+        "rectangular alpha bounds."
     )
 
     if dpi_warnings:
