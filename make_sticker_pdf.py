@@ -56,11 +56,22 @@ def natural_sort_key(path: Path) -> list[object]:
     return key
 
 
+def trim_transparent_whitespace(image: Image.Image) -> tuple[Image.Image, bool]:
+    """Return an RGBA image cropped to its non-transparent rectangular bounds."""
+    rgba = image.convert("RGBA")
+    bbox = rgba.getchannel("A").getbbox()
+    if bbox is None:
+        return rgba, False
+    if bbox == (0, 0, rgba.width, rgba.height):
+        return rgba, False
+    return rgba.crop(bbox), True
+
+
 def parse_args(argv: Iterable[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Create a printable US-letter PDF from PNG files in a folder "
-            "using a symmetric grid layout."
+            "using a symmetric grid layout with transparent-edge trimming."
         )
     )
     parser.add_argument(
@@ -98,8 +109,8 @@ def parse_args(argv: Iterable[str]) -> argparse.Namespace:
         type=float,
         default=0.05,
         help=(
-            "Inner padding inside each grid cell in inches (default: 0.05). "
-            "Increase for more spacing between images."
+            "Rectangular whitespace border inside each grid cell in inches "
+            "(default: 0.05). Increase for more spacing between images."
         ),
     )
     parser.add_argument(
@@ -222,6 +233,7 @@ def main(argv: Iterable[str]) -> int:
 
     c = canvas.Canvas(str(args.output), pagesize=page_size)
     dpi_warnings: list[str] = []
+    trimmed_count = 0
 
     pages = math.ceil(len(images) / args.images_per_page)
     index = 0
@@ -244,7 +256,11 @@ def main(argv: Iterable[str]) -> int:
             )
 
             with Image.open(image_path) as im:
-                src_w, src_h = im.size
+                processed_image, was_trimmed = trim_transparent_whitespace(im)
+                if was_trimmed:
+                    trimmed_count += 1
+
+                src_w, src_h = processed_image.size
                 draw_rect = fit_contain(src_w, src_h, target)
 
                 dpi_x = effective_dpi(src_w, draw_rect.width)
@@ -255,16 +271,16 @@ def main(argv: Iterable[str]) -> int:
                         f"{image_path.name}: ~{min_actual:.0f} DPI at placed size"
                     )
 
-            c.drawImage(
-                ImageReader(str(image_path)),
-                draw_rect.x,
-                draw_rect.y,
-                width=draw_rect.width,
-                height=draw_rect.height,
-                preserveAspectRatio=True,
-                anchor="c",
-                mask="auto",
-            )
+                c.drawImage(
+                    ImageReader(processed_image),
+                    draw_rect.x,
+                    draw_rect.y,
+                    width=draw_rect.width,
+                    height=draw_rect.height,
+                    preserveAspectRatio=True,
+                    anchor="c",
+                    mask="auto",
+                )
 
         c.showPage()
 
@@ -274,6 +290,10 @@ def main(argv: Iterable[str]) -> int:
     print(
         f"Layout: {grid.rows} row(s) x {grid.cols} column(s), "
         f"{args.images_per_page} image(s)/page, {args.orientation}."
+    )
+    print(
+        "Transparent trim: "
+        f"{trimmed_count}/{len(images)} image(s) cropped to rectangular alpha bounds."
     )
 
     if dpi_warnings:
